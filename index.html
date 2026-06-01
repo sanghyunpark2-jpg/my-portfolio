@@ -1,0 +1,622 @@
+import { useState, useEffect, useRef } from "react";
+
+const STORAGE_KEY = "portfolio_v3";
+const CAT_ORDER = { cash_eq: 0, cyclical: 1, defensive: 2, other: 3 };
+const catColor  = { defensive: "#4f8ef7", cyclical: "#f7864f", cash_eq: "#0096c7", other: "#909090" };
+const catBg     = { defensive: "#ddeaff", cyclical: "#ffe8d6", cash_eq: "#d0f0fc", other: "#e8e8e8" };
+const catBorder = { defensive: "#b8d0f7", cyclical: "#f7c9aa", cash_eq: "#90d5f0", other: "#d0d0d0" };
+const catLabel  = { defensive: "경기방어주", cyclical: "경기민감주", cash_eq: "현금성자산", other: "기타" };
+const catShort  = { cyclical: "민감주", defensive: "방어주", cash_eq: "현금성자산", other: "기타" };
+const COMBINED  = "__combined__";
+const CATS      = ["cash_eq","cyclical","defensive","other"];
+
+const fmt = n => "$" + Math.round(Number(n)).toLocaleString("en-US");
+const fmtComma = val => {
+  if (val === "" || val == null) return "";
+  const parts = String(val).split(".");
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return parts.join(".");
+};
+const sumCat = (arr, cat) => arr.filter(x => x.category === cat).reduce((s, x) => s + x.amount, 0);
+const getAccColor = name => {
+  if (name && name.startsWith("상현")) return { active: "#3b5bdb", light: "#e8ecfd", border: "#3b5bdb", dot: "#3b5bdb" };
+  if (name && name.startsWith("영주")) return { active: "#c92a2a", light: "#ffe3e3", border: "#c92a2a", dot: "#c92a2a" };
+  return { active: "#1a1a2e", light: "#fff", border: "#dde1ec", dot: "#888" };
+};
+const tagSt  = cat => ({ fontSize: 9, fontWeight: 700, background: catBg[cat], color: catColor[cat], border: "1px solid " + catBorder[cat], borderRadius: 10, padding: "1px 0", whiteSpace: "nowrap", flexShrink: 0, width: 52, textAlign: "center", display: "inline-block" });
+const smBtn  = (bg, col) => ({ background: bg, color: col, border: "none", borderRadius: 7, padding: "5px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" });
+const iconBtn  = { background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 3px", borderRadius: 5 };
+const ghostBtn = { background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#aaa", padding: "0 1px" };
+
+function DonutChart({ segments }) {
+  const cx = 100, cy = 100, r = 80, ir = 50;
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  if (total === 0) return (
+    <svg viewBox="0 0 200 200" width="100%">
+      <circle cx={cx} cy={cy} r={r} fill="#f0f2f8"/>
+      <circle cx={cx} cy={cy} r={ir} fill="white"/>
+      <text x={cx} y={cy+5} textAnchor="middle" fontSize={11} fill="#ccc">없음</text>
+    </svg>
+  );
+  let angle = -Math.PI / 2;
+  const slices = segments.filter(s => s.value > 0).map(s => {
+    const sweep = Math.min(s.value / total * 2 * Math.PI, 2 * Math.PI - 0.0001);
+    const end = angle + sweep;
+    const lg = sweep > Math.PI ? 1 : 0;
+    const [c1, s1, c2, s2] = [Math.cos(angle), Math.sin(angle), Math.cos(end), Math.sin(end)];
+    const d = `M${cx+r*c1} ${cy+r*s1} A${r} ${r} 0 ${lg} 1 ${cx+r*c2} ${cy+r*s2} L${cx+ir*c2} ${cy+ir*s2} A${ir} ${ir} 0 ${lg} 0 ${cx+ir*c1} ${cy+ir*s1}Z`;
+    angle = end;
+    return { color: s.color, d };
+  });
+  return (
+    <svg viewBox="0 0 200 200" width="100%">
+      {slices.map((s, i) => <path key={i} d={s.d} fill={s.color} stroke="#fff" strokeWidth={2}/>)}
+      <circle cx={cx} cy={cy} r={ir} fill="white"/>
+    </svg>
+  );
+}
+
+function LabeledDonut({ segments }) {
+  const cx = 100, cy = 100, r = 90, ir = 56;
+  const vb = "-100 -25 400 250";
+  const ELBOW_R = r + 12, H_LEN = 18, MIN_GAP = 28;
+
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  if (total === 0) return (
+    <svg viewBox={vb} width="100%">
+      <circle cx={cx} cy={cy} r={r} fill="#f0f2f8"/>
+      <circle cx={cx} cy={cy} r={ir} fill="white"/>
+      <text x={cx} y={cy+5} textAnchor="middle" fontSize={11} fill="#ccc">없음</text>
+    </svg>
+  );
+  let angle = -Math.PI / 2;
+  const slices = segments.filter(s => s.value > 0).map(s => {
+    const pct = s.value / total * 100;
+    const sweep = Math.min(pct / 100 * 2 * Math.PI, 2 * Math.PI - 0.0001);
+    const sa = angle, ea = angle + sweep;
+    const mid = (sa + ea) / 2;
+    const lg = sweep > Math.PI ? 1 : 0;
+    const [c1, s1, c2, s2] = [Math.cos(sa), Math.sin(sa), Math.cos(ea), Math.sin(ea)];
+    const d = `M${cx+r*c1} ${cy+r*s1} A${r} ${r} 0 ${lg} 1 ${cx+r*c2} ${cy+r*s2} L${cx+ir*c2} ${cy+ir*s2} A${ir} ${ir} 0 ${lg} 0 ${cx+ir*c1} ${cy+ir*s1}Z`;
+    angle = ea;
+    const cos = Math.cos(mid), sin = Math.sin(mid);
+    return { ...s, d, pct, mid, cos, sin, isRight: cos >= 0 };
+  });
+
+  const spreadY = group => {
+    const sorted = [...group].sort((a, b) => a.sin - b.sin);
+    const out = [];
+    for (let i = 0; i < sorted.length; i++) {
+      const nat = cy + ELBOW_R * sorted[i].sin;
+      const finalY = i === 0 ? nat : Math.max(nat, out[i-1].finalY + MIN_GAP);
+      out.push({ ...sorted[i], finalY });
+    }
+    return out;
+  };
+  const positioned = [
+    ...spreadY(slices.filter(s => s.isRight)),
+    ...spreadY(slices.filter(s => !s.isRight)),
+  ];
+
+  return (
+    <svg viewBox={vb} width="100%">
+      {slices.map((s, i) => <path key={i} d={s.d} fill={s.color} stroke="#fff" strokeWidth={2}/>)}
+      <circle cx={cx} cy={cy} r={ir} fill="white"/>
+      {positioned.map((s, i) => {
+        const x1 = cx + r * s.cos, y1 = cy + r * s.sin;
+        const x2 = cx + ELBOW_R * s.cos, y2 = s.finalY;
+        const x3 = x2 + (s.isRight ? H_LEN : -H_LEN);
+        const tx = x3 + (s.isRight ? 3 : -3);
+        const anchor = s.isRight ? "start" : "end";
+        return (
+          <g key={i}>
+            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={s.color} strokeWidth={1}/>
+            <line x1={x2} y1={y2} x2={x3} y2={y2} stroke={s.color} strokeWidth={1}/>
+            <circle cx={x1} cy={y1} r={2} fill={s.color}/>
+            <text x={tx} y={y2-5} fontSize={13} fontWeight="700" fill={s.color} textAnchor={anchor}>{s.label}</text>
+            <text x={tx} y={y2+11} fontSize={13} fill="#555" textAnchor={anchor}>{s.pct.toFixed(1)}%</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function MiniLegend({ items, total }) {
+  return items.map((item, i) => (
+    <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4 }}>
+      <div style={{ width: 7, height: 7, borderRadius: 1, background: item.color, flexShrink: 0 }}/>
+      <span style={{ fontSize: 10, color: "#555", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+      <span style={{ marginLeft: "auto", fontSize: 10, color: "#888", whiteSpace: "nowrap" }}>
+        {total > 0 ? (item.value / total * 100).toFixed(1) + "%" : "0%"}
+      </span>
+    </div>
+  ));
+}
+
+function Calculator() {
+  const [expr, setExpr] = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(false);
+  const calculate = () => {
+    if (!expr.trim()) return;
+    try {
+      const cleaned = expr.replace(/,/g, "").replace(/[^0-9+\-*/().%\s]/g, "");
+      const res = Function('"use strict"; return (' + cleaned + ')')();
+      if (typeof res !== "number" || !isFinite(res)) { setError(true); setResult("오류"); return; }
+      setError(false); setResult(Math.round(res * 10000) / 10000);
+    } catch(e) { setError(true); setResult("오류"); }
+  };
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ display: "flex", gap: 3 }}>
+        <input value={expr} onChange={e => { setExpr(e.target.value); setResult(null); }}
+          onKeyDown={e => e.key === "Enter" && calculate()} placeholder="예: 100+200"
+          style={{ flex: 1, minWidth: 0, width: 0, fontSize: 11, padding: "5px 6px", border: "1px solid #dde1ec", borderRadius: 6, outline: "none", background: "#f7f8fc" }}/>
+        <button onClick={calculate} style={{ flexShrink: 0, background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>=</button>
+      </div>
+      {result !== null && (
+        <div style={{ marginTop: 5, padding: "4px 8px", borderRadius: 6, background: error ? "#fff0f0" : "#f0f7ff",
+          fontSize: 13, fontWeight: 700, color: error ? "#c92a2a" : "#1a1a2e", textAlign: "right",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {error ? result : Number(result).toLocaleString()}
+        </div>
+      )}
+      <div style={{ marginTop: 4, fontSize: 8, color: "#ccc" }}>+ − * / ( ) · Enter</div>
+    </div>
+  );
+}
+
+function AccChip({ a, isActive, isDragOver, onAccDragStart, onAccDragEnd, onAccDragOver, onAccDrop, onClick, onRename, onConfirmDelete, renamingId, renameVal, setRenameVal, saveRename, setRenamingId }) {
+  const ac = getAccColor(a.name);
+  return (
+    <div draggable onDragStart={onAccDragStart} onDragEnd={onAccDragEnd} onDragOver={onAccDragOver} onDrop={onAccDrop} onClick={onClick}
+      style={{ display: "inline-flex", alignItems: "center", gap: 2, cursor: "pointer", borderRadius: 14, padding: "3px 6px 3px 8px",
+        background: isActive ? ac.active : ac.light, border: "1px solid " + (isActive ? ac.active : ac.border),
+        opacity: isDragOver ? 0.5 : 1, flexShrink: 0 }}>
+      <div style={{ width: 5, height: 5, borderRadius: "50%", background: ac.dot, marginRight: 1, flexShrink: 0 }}/>
+      {renamingId === a.id
+        ? <input autoFocus value={renameVal} onChange={e => setRenameVal(e.target.value)} onClick={e => e.stopPropagation()}
+            onKeyDown={e => { if (e.key === "Enter") saveRename(); if (e.key === "Escape") setRenamingId(null); }}
+            style={{ fontSize: 10, width: 60, border: "none", outline: "none", background: "transparent", fontWeight: 600, color: isActive ? "#fff" : "#333" }} />
+        : <span style={{ fontSize: 10, fontWeight: 600, color: isActive ? "#fff" : "#333", whiteSpace: "nowrap" }}>{a.name}</span>
+      }
+      <button onClick={e => { e.stopPropagation(); onRename(); }} style={{ ...ghostBtn, fontSize: 9, padding: 0 }}>✏️</button>
+      <button onClick={e => { e.stopPropagation(); onConfirmDelete(); }} style={{ ...ghostBtn, fontSize: 9, padding: 0 }}>✕</button>
+    </div>
+  );
+}
+
+export default function App() {
+  const [data, setData]               = useState({ accounts: [], activeId: null });
+  const [loaded, setLoaded]           = useState(false);
+  const [showAcc, setShowAcc]         = useState(false);
+  const [newAccName, setNewAccName]   = useState("");
+  const [form, setForm]               = useState({ name: "", amount: "", category: "cyclical" });
+  const [editId, setEditId]           = useState(null);
+  const [editForm, setEditForm]       = useState({});
+  const [tab, setTab]                 = useState("all");
+  const [err, setErr]                 = useState("");
+  const [renamingId, setRenamingId]   = useState(null);
+  const [renameVal, setRenameVal]     = useState("");
+  const [confirmDeleteAccId, setConfirmDeleteAccId] = useState(null);
+  const [dragIdx, setDragIdx]         = useState(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
+  const [accDragIdx, setAccDragIdx]   = useState(null);
+  const [accDragOver, setAccDragOver] = useState(null);
+  const nameRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get(STORAGE_KEY);
+        if (r && r.value) setData(JSON.parse(r.value));
+      } catch(e) {}
+      setLoaded(true);
+    })();
+  }, []);
+
+  const persist = async next => {
+    setData(next);
+    try { await window.storage.set(STORAGE_KEY, JSON.stringify(next)); } catch(e) {}
+  };
+
+  const isCombined = data.activeId === COMBINED;
+  const activeAcc  = data.accounts.find(a => a.id === data.activeId) || null;
+  const stocks     = activeAcc ? activeAcc.stocks : [];
+  const cash       = activeAcc ? (activeAcc.cash || "") : "";
+  const total      = stocks.reduce((s, x) => s + x.amount, 0);
+  const displayed  = tab === "all" ? stocks : stocks.filter(x => x.category === tab);
+
+  const cMap = {};
+  data.accounts.forEach(acc => acc.stocks.forEach(s => {
+    const k = s.name.trim().toLowerCase();
+    if (!cMap[k]) cMap[k] = { id: k, name: s.name, amount: 0, category: s.category, sources: [] };
+    cMap[k].amount += s.amount;
+    cMap[k].sources.push({ accName: acc.name, amount: s.amount });
+  }));
+  const combinedStocks  = Object.values(cMap).sort((a, b) =>
+    CAT_ORDER[a.category] !== CAT_ORDER[b.category]
+      ? CAT_ORDER[a.category] - CAT_ORDER[b.category]
+      : b.amount - a.amount
+  );
+  const combinedTotal   = combinedStocks.reduce((s, x) => s + x.amount, 0);
+  const combinedCash    = data.accounts.reduce((s, a) => s + (parseFloat(a.cash) || 0), 0);
+  const combinedDisplay = tab === "all" ? combinedStocks : combinedStocks.filter(x => x.category === tab);
+
+  const T = isCombined
+    ? { total: combinedTotal, cash: combinedCash, cyc: sumCat(combinedStocks,"cyclical"), def: sumCat(combinedStocks,"defensive"), ce: sumCat(combinedStocks,"cash_eq"), oth: sumCat(combinedStocks,"other") }
+    : { total, cash: parseFloat(cash)||0, cyc: sumCat(stocks,"cyclical"), def: sumCat(stocks,"defensive"), ce: sumCat(stocks,"cash_eq"), oth: sumCat(stocks,"other") };
+  const grandTotal = T.cash + T.total;
+  const row2Segs = [
+    { key:"cyclical", val: T.cyc }, { key:"defensive", val: T.def },
+    { key:"cash_eq",  val: T.ce  }, { key:"other",     val: T.oth },
+  ].map(s => ({ ...s, pct: T.total > 0 ? s.val / T.total * 100 : 0 }));
+
+  const updateStocks = fn => persist({ ...data, accounts: data.accounts.map(a => a.id === data.activeId ? { ...a, stocks: fn(a.stocks) } : a) });
+  const updateCash   = v  => persist({ ...data, accounts: data.accounts.map(a => a.id === data.activeId ? { ...a, cash: v } : a) });
+
+  const addAccount = () => {
+    if (!newAccName.trim()) return;
+    const id = Date.now();
+    persist({ accounts: [...data.accounts, { id, name: newAccName.trim(), stocks: [], cash: "" }], activeId: id });
+    setNewAccName(""); setShowAcc(false); setTab("all");
+  };
+  const deleteAccount = id => {
+    const next = data.accounts.filter(a => a.id !== id);
+    persist({ accounts: next, activeId: next.length ? (data.activeId === id ? next[0].id : data.activeId) : null });
+    setConfirmDeleteAccId(null);
+  };
+  const switchAccount = id => { persist({ ...data, activeId: id }); setEditId(null); setTab("all"); };
+  const addStock = () => {
+    if (!form.name.trim()) { setErr("종목명을 입력하세요."); return; }
+    const amt = parseFloat(form.amount);
+    if (!form.amount || isNaN(amt) || amt <= 0) { setErr("유효한 금액을 입력하세요."); return; }
+    setErr("");
+    updateStocks(ss => [...ss, { id: Date.now(), name: form.name.trim(), amount: amt, category: form.category }]);
+    setForm(f => ({ name: "", amount: "", category: f.category }));
+    setTimeout(() => nameRef.current && nameRef.current.focus(), 0);
+  };
+  const deleteStock = id => updateStocks(ss => ss.filter(x => x.id !== id));
+  const startEdit   = s => { setEditId(s.id); setEditForm({ name: s.name, amount: String(s.amount), category: s.category }); };
+  const saveEdit    = () => {
+    const amt = parseFloat(editForm.amount);
+    if (!editForm.name.trim() || isNaN(amt) || amt <= 0) return;
+    updateStocks(ss => ss.map(x => x.id === editId ? { ...x, name: editForm.name.trim(), amount: amt, category: editForm.category } : x));
+    setEditId(null);
+  };
+  const saveRename = () => {
+    if (!renameVal.trim()) return;
+    persist({ ...data, accounts: data.accounts.map(a => a.id === renamingId ? { ...a, name: renameVal.trim() } : a) });
+    setRenamingId(null);
+  };
+
+  const onDragStart = (e, i) => { setDragIdx(i); e.currentTarget.style.opacity = "0.4"; };
+  const onDragEnd   = e => { e.currentTarget.style.opacity = "1"; setDragIdx(null); setDragOverIdx(null); };
+  const onDragOver  = (e, i) => { e.preventDefault(); if (dragIdx !== null && dragIdx !== i) setDragOverIdx(i); };
+  const onDrop      = (e, i) => {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === i) return;
+    updateStocks(ss => {
+      const arr = [...ss];
+      const fi = arr.findIndex(x => x.id === displayed[dragIdx].id);
+      const ti = arr.findIndex(x => x.id === displayed[i].id);
+      const [m] = arr.splice(fi, 1); arr.splice(ti, 0, m);
+      return arr;
+    });
+    setDragIdx(null); setDragOverIdx(null);
+  };
+  const onAccDragStart = (e, i) => { setAccDragIdx(i); e.currentTarget.style.opacity = "0.4"; };
+  const onAccDragEnd   = e => { e.currentTarget.style.opacity = "1"; setAccDragIdx(null); setAccDragOver(null); };
+  const onAccDragOver  = (e, i) => { e.preventDefault(); if (accDragIdx !== null && accDragIdx !== i) setAccDragOver(i); };
+  const onAccDrop      = (e, i) => {
+    e.preventDefault();
+    if (accDragIdx === null || accDragIdx === i) return;
+    const arr = [...data.accounts]; const [m] = arr.splice(accDragIdx, 1); arr.splice(i, 0, m);
+    persist({ ...data, accounts: arr }); setAccDragIdx(null); setAccDragOver(null);
+  };
+
+  if (!loaded) return <div style={{ padding: 40, textAlign: "center", color: "#888" }}>불러오는 중...</div>;
+
+  const half    = Math.ceil(data.accounts.length / 2);
+  const accRow1 = data.accounts.slice(0, half);
+  const accRow2 = data.accounts.slice(half);
+
+  const chipProps = (a, idx) => ({
+    a, isActive: a.id === data.activeId, isDragOver: accDragOver === idx,
+    onAccDragStart: e => onAccDragStart(e, idx), onAccDragEnd,
+    onAccDragOver:  e => onAccDragOver(e, idx),  onAccDrop: e => onAccDrop(e, idx),
+    onClick:         () => switchAccount(a.id),
+    onRename:        () => { setRenamingId(a.id); setRenameVal(a.name); },
+    onConfirmDelete: () => setConfirmDeleteAccId(a.id),
+    renamingId, renameVal, setRenameVal, saveRename, setRenamingId,
+  });
+
+  const SummaryCard = () => (
+    <div style={{ background: "#fff", border: "1px solid #e0e4ef", borderRadius: 10, padding: "8px 10px", display: "flex", flexDirection: "column", justifyContent: "space-around" }}>
+      {[
+        { label: "보유현금",    value: T.cash,     color: "#2a9d5c", editable: !isCombined },
+        { label: "총투자금액",  value: T.total,    color: "#e05c5c" },
+        { label: "현금성자산",  value: T.ce,       color: catColor.cash_eq },
+        { label: "총 보유금액", value: grandTotal, color: "#1a1a2e", bold: true },
+      ].map((item, i) => (
+        <div key={i} style={{ borderBottom: i < 3 ? "1px solid #f0f2f8" : "none", padding: "2px 0 4px 0" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#888", marginBottom: 1 }}>{item.label}</div>
+          {item.editable
+            ? <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: item.color }}>$</span>
+                <input type="text" value={fmtComma(cash)} placeholder="0"
+                  onChange={e => { const raw = e.target.value.replace(/,/g,""); if (raw===""||/^\d*\.?\d*$/.test(raw)) updateCash(raw); }}
+                  style={{ flex: 1, border: "none", background: "transparent", fontSize: 14, fontWeight: 700, color: item.color, outline: "none" }}/>
+              </div>
+            : <div style={{ fontSize: item.bold ? 14 : 13, fontWeight: 700, color: item.color }}>{fmt(item.value)}</div>
+          }
+        </div>
+      ))}
+    </div>
+  );
+
+  const StockRow = ({ s, pct, isLast, isCombinedRow }) => {
+    const isEditing = !isCombinedRow && editId === s.id;
+    const cols = isCombinedRow ? "16px 1fr 110px" : "16px 1fr 100px 60px";
+    return (
+      <div draggable={!isCombinedRow && !isEditing}
+        onDragStart={!isCombinedRow ? e => onDragStart(e, s._idx) : undefined}
+        onDragEnd={!isCombinedRow ? onDragEnd : undefined}
+        onDragOver={!isCombinedRow ? e => onDragOver(e, s._idx) : undefined}
+        onDrop={!isCombinedRow ? e => onDrop(e, s._idx) : undefined}
+        style={{ borderBottom: isLast ? "none" : "1px solid #f0f2f8", borderTop: !isCombinedRow && dragOverIdx === s._idx ? "2px solid #4f8ef7" : "none" }}>
+        {isEditing ? (
+          <div style={{ padding: "10px 14px", background: "#fafbff", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 16, color: "#ccc" }}>⠿</span>
+            <input value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })}
+              style={{ flex: "1 1 90px", padding: "5px 8px", fontSize: 12, border: "1px solid #b8d0f7", borderRadius: 6, outline: "none" }} />
+            <input type="number" value={editForm.amount} onChange={e => setEditForm({ ...editForm, amount: e.target.value })}
+              style={{ flex: "1 1 80px", padding: "5px 8px", fontSize: 12, border: "1px solid #b8d0f7", borderRadius: 6, outline: "none" }} />
+            {CATS.map(cat => (
+              <button key={cat} onClick={() => setEditForm({ ...editForm, category: cat })}
+                style={{ fontSize: 10, fontWeight: 600, padding: "5px 8px", borderRadius: 6, cursor: "pointer",
+                  border: "1px solid " + (editForm.category === cat ? catColor[cat] : "#dde1ec"),
+                  background: editForm.category === cat ? catColor[cat] : "#f7f8fc",
+                  color: editForm.category === cat ? "#fff" : "#666" }}>{catShort[cat]}</button>
+            ))}
+            <button onClick={saveEdit} style={smBtn("#1a1a2e","#fff")}>저장</button>
+            <button onClick={() => setEditId(null)} style={smBtn("#eee","#555")}>취소</button>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", padding: "7px 14px", cursor: isCombinedRow ? "default" : "grab" }}>
+            <span style={{ fontSize: 16, color: "#ccc", userSelect: "none" }}>{isCombinedRow ? "" : "⠿"}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={tagSt(s.category)}>{catLabel[s.category]}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#1a1a2e", whiteSpace: "nowrap", width: "8ch", minWidth: "8ch", overflow: "hidden", textOverflow: "ellipsis" }}>{s.name}</span>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", width: 46, flexShrink: 0 }}>
+                  <span style={{ fontSize: 8, color: "#bbb", lineHeight: 1 }}>비중</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: catColor[s.category], lineHeight: 1.4 }}>{pct.toFixed(1)}%</span>
+                </div>
+                <div style={{ flex: 1, height: 10, background: "#f0f2f8", borderRadius: 5, minWidth: 20 }}>
+                  <div style={{ width: pct + "%", height: "100%", background: catColor[s.category], borderRadius: 5, transition: "width 0.3s" }}/>
+                </div>
+              </div>
+              {isCombinedRow && s.sources && (
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 3 }}>
+                  {s.sources.map((src, i) => (
+                    <span key={i} style={{ fontSize: 10, color: "#888", background: "#f0f2f8", borderRadius: 10, padding: "1px 7px" }}>
+                      {src.accName}: {fmt(src.amount)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span style={{ textAlign: "right", fontSize: 12, fontWeight: 700, color: catColor[s.category] }}>{fmt(s.amount)}</span>
+            {!isCombinedRow && (
+              <div style={{ display: "flex", justifyContent: "center", gap: 4 }}>
+                <button onClick={() => startEdit(s)} style={iconBtn}>✏️</button>
+                <button onClick={() => deleteStock(s.id)} style={iconBtn}>🗑️</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ fontFamily: "'Segoe UI',sans-serif", maxWidth: 760, margin: "0 auto", padding: "18px 14px", background: "#f7f8fc", minHeight: "100vh" }}>
+      <h1 style={{ fontSize: 20, fontWeight: 700, color: "#1a1a2e", marginBottom: 10 }}>📊 주식 포트폴리오</h1>
+
+      {/* 계좌 탭 */}
+      <div style={{ display: "flex", alignItems: "stretch", marginBottom: 6, background: "#fff", border: "1px solid #e0e4ef", borderRadius: 12, padding: "8px 10px" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", gap: 5, marginBottom: accRow2.length || showAcc ? 5 : 0, flexWrap: "nowrap", overflowX: "auto" }}>
+            {accRow1.map((a, i) => <AccChip key={a.id} {...chipProps(a, i)} />)}
+          </div>
+          <div style={{ display: "flex", gap: 5, flexWrap: "nowrap", overflowX: "auto", alignItems: "center" }}>
+            {accRow2.map((a, i) => <AccChip key={a.id} {...chipProps(a, half + i)} />)}
+            {showAcc
+              ? <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <input autoFocus placeholder="계좌명" value={newAccName} onChange={e => setNewAccName(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") addAccount(); if (e.key === "Escape") setShowAcc(false); }}
+                    style={{ fontSize: 11, padding: "4px 8px", border: "1px solid #dde1ec", borderRadius: 20, outline: "none", width: 80 }} />
+                  <button onClick={addAccount} style={{ ...smBtn("#1a1a2e","#fff"), padding: "3px 8px", fontSize: 11 }}>추가</button>
+                  <button onClick={() => setShowAcc(false)} style={{ ...smBtn("#eee","#555"), padding: "3px 8px", fontSize: 11 }}>취소</button>
+                </div>
+              : <button onClick={() => setShowAcc(true)} style={{ fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 20, border: "1px solid #dde1ec", background: "#eef", color: "#1a1a2e", cursor: "pointer", flexShrink: 0 }}>+ 계좌 추가</button>
+            }
+          </div>
+        </div>
+        {data.accounts.length >= 2 && (
+          <>
+            <div style={{ width: 1, background: "#e0e4ef", margin: "0 10px", flexShrink: 0 }}/>
+            <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+              <button onClick={() => switchAccount(COMBINED)}
+                style={{ fontSize: 11, fontWeight: 600, padding: "4px 12px", borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap",
+                  border: "1px solid " + (isCombined ? "#6c47d4" : "#dde1ec"),
+                  background: isCombined ? "#6c47d4" : "#fff", color: isCombined ? "#fff" : "#555" }}>🔀 통합</button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 삭제 확인 */}
+      {confirmDeleteAccId && (() => {
+        const a = data.accounts.find(x => x.id === confirmDeleteAccId);
+        return a ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", background: "#fff3f3", border: "1px solid #f7c9c9", borderRadius: 8, marginBottom: 8, fontSize: 12 }}>
+            <span style={{ color: "#c92a2a", fontWeight: 600 }}>"{a.name}" 계좌를 삭제하시겠습니까?</span>
+            <button onClick={() => deleteAccount(confirmDeleteAccId)} style={{ ...smBtn("#c92a2a","#fff"), padding: "3px 10px", fontSize: 11 }}>삭제</button>
+            <button onClick={() => setConfirmDeleteAccId(null)} style={{ ...smBtn("#eee","#555"), padding: "3px 10px", fontSize: 11 }}>취소</button>
+          </div>
+        ) : null;
+      })()}
+
+      {!data.activeId
+        ? <div style={{ textAlign: "center", color: "#aaa", fontSize: 14, padding: "60px 0" }}>위에서 계좌를 추가해주세요.</div>
+        : <>
+          {!isCombined && (
+            <input placeholder="메모..." value={activeAcc?.memo || ""}
+              onChange={e => persist({ ...data, accounts: data.accounts.map(a => a.id === data.activeId ? { ...a, memo: e.target.value } : a) })}
+              style={{ width: "100%", boxSizing: "border-box", fontSize: 13, fontWeight: 600, color: "#333", border: "none", borderBottom: "1px solid #dde1ec", background: "transparent", outline: "none", padding: "2px 4px", marginBottom: 10 }}
+            />
+          )}
+
+          {/* 통합 뷰 상단 */}
+          {isCombined ? (
+            <div style={{ display: "grid", gridTemplateColumns: "0.4fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
+              <SummaryCard/>
+              <div style={{ background: "#fff", border: "1px solid #e0e4ef", borderRadius: 10, padding: "6px 8px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#555", marginBottom: 2 }}>전체 비중</div>
+                <LabeledDonut segments={[
+                  { label: "보유현금",   value: T.cash, color: "#2a9d5c" },
+                  { label: "경기민감주", value: T.cyc,  color: catColor.cyclical },
+                  { label: "경기방어주", value: T.def,  color: catColor.defensive },
+                  { label: "현금성자산", value: T.ce,   color: catColor.cash_eq },
+                  { label: "기타",       value: T.oth,  color: catColor.other },
+                ].filter(x => x.value > 0)}/>
+              </div>
+              <div style={{ background: "#fff", border: "1px solid #e0e4ef", borderRadius: 10, padding: "6px 8px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#555", marginBottom: 2 }}>주식 비중</div>
+                <LabeledDonut segments={[
+                  { label: "경기민감주", value: T.cyc, color: catColor.cyclical },
+                  { label: "경기방어주", value: T.def, color: catColor.defensive },
+                  { label: "현금성자산", value: T.ce,  color: catColor.cash_eq },
+                  { label: "기타",       value: T.oth, color: catColor.other },
+                ].filter(x => x.value > 0)}/>
+              </div>
+            </div>
+          ) : (
+            /* 개별 계좌 상단 */
+            <div style={{ display: "grid", gridTemplateColumns: "0.5fr 1fr 1fr 0.9fr", gap: 10, marginBottom: 14 }}>
+              <SummaryCard/>
+              <div style={{ background: "#fff", border: "1px solid #e0e4ef", borderRadius: 10, padding: "10px 12px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#555", marginBottom: 6 }}>자산 비중</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ width: 80, flexShrink: 0 }}>
+                    <DonutChart segments={[{ value: T.cash, color: "#2a9d5c" },{ value: T.total-T.ce, color: "#e05c5c" },{ value: T.ce, color: catColor.cash_eq }]}/>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <MiniLegend items={[
+                      { label: "보유현금",   value: T.cash,       color: "#2a9d5c" },
+                      { label: "총투자금액", value: T.total-T.ce, color: "#e05c5c" },
+                      { label: "현금성자산", value: T.ce,         color: catColor.cash_eq },
+                    ]} total={grandTotal}/>
+                  </div>
+                </div>
+              </div>
+              <div style={{ background: "#fff", border: "1px solid #e0e4ef", borderRadius: 10, padding: "10px 12px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#555", marginBottom: 6 }}>주식 비중</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ width: 80, flexShrink: 0 }}>
+                    <DonutChart segments={row2Segs.filter(s => s.val > 0).map(s => ({ value: s.val, color: catColor[s.key] }))}/>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <MiniLegend items={row2Segs.filter(s => s.val > 0).map(s => ({ label: catLabel[s.key], value: s.val, color: catColor[s.key] }))} total={T.total}/>
+                  </div>
+                </div>
+              </div>
+              <div style={{ background: "#fff", border: "1px solid #e0e4ef", borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column", justifyContent: "center", minWidth: 0, overflow: "hidden" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#555", marginBottom: 6 }}>계산기</div>
+                <Calculator/>
+              </div>
+            </div>
+          )}
+
+          {/* 종목 추가 */}
+          {!isCombined && (
+            <div style={{ background: "#fff", border: "1px solid #e0e4ef", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input ref={nameRef} placeholder="종목명" value={form.name}
+                  onChange={e => setForm({ ...form, name: e.target.value })} onKeyDown={e => e.key === "Enter" && addStock()}
+                  style={{ flex: "1 1 100px", padding: "7px 10px", fontSize: 12, border: "1px solid #dde1ec", borderRadius: 8, outline: "none", background: "#f7f8fc" }}/>
+                <input placeholder="금액 ($)" type="number" value={form.amount}
+                  onChange={e => setForm({ ...form, amount: e.target.value })} onKeyDown={e => e.key === "Enter" && addStock()}
+                  style={{ flex: "1 1 90px", padding: "7px 10px", fontSize: 12, border: "1px solid #dde1ec", borderRadius: 8, outline: "none", background: "#f7f8fc" }}/>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  {CATS.map(cat => (
+                    <button key={cat} onClick={() => setForm({ ...form, category: cat })}
+                      style={{ fontSize: 11, fontWeight: 600, padding: "6px 10px", borderRadius: 7, cursor: "pointer",
+                        border: "1px solid " + (form.category === cat ? catColor[cat] : "#dde1ec"),
+                        background: form.category === cat ? catColor[cat] : "#f7f8fc",
+                        color: form.category === cat ? "#fff" : "#666" }}>
+                      {catShort[cat]}
+                    </button>
+                  ))}
+                </div>
+                <button onClick={addStock} style={{ ...smBtn("#1a1a2e","#fff"), padding: "7px 16px", fontSize: 12 }}>추가</button>
+              </div>
+              {err && <div style={{ fontSize: 11, color: "#e05252", marginTop: 6 }}>{err}</div>}
+            </div>
+          )}
+
+          {/* 필터 탭 */}
+          <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
+            {[["all","전체"], ...CATS.map(c => [c, catLabel[c]])].map(([v, l]) => (
+              <button key={v} onClick={() => setTab(v)}
+                style={{ fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: 20, cursor: "pointer", border: "1px solid #dde1ec",
+                  background: tab === v ? "#1a1a2e" : "#fff", color: tab === v ? "#fff" : "#555" }}>{l}</button>
+            ))}
+            {!isCombined && <span style={{ marginLeft: "auto", fontSize: 11, color: "#bbb", alignSelf: "center" }}>⠿ 드래그로 순서 변경</span>}
+            {isCombined  && <span style={{ marginLeft: "auto", fontSize: 11, color: "#888", alignSelf: "center" }}>모든 계좌 합산 · 읽기 전용</span>}
+          </div>
+
+          {/* 종목 테이블 */}
+          <div style={{ background: "#fff", border: "1px solid #e0e4ef", borderRadius: 12, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: isCombined ? "16px 1fr 110px" : "16px 1fr 100px 60px",
+              padding: "7px 14px", background: "#f0f2f8", fontSize: 10, fontWeight: 700, color: "#888", borderBottom: "1px solid #e8eaf2" }}>
+              <span/><span>종목</span><span style={{ textAlign: "right" }}>매수금액</span>
+              {!isCombined && <span style={{ textAlign: "center" }}>관리</span>}
+            </div>
+            {isCombined && (combinedDisplay.length === 0
+              ? <div style={{ textAlign: "center", color: "#bbb", fontSize: 13, padding: "30px 0" }}>종목이 없습니다.</div>
+              : combinedDisplay.map((s, idx) => {
+                  const pct = combinedTotal > 0 ? s.amount / combinedTotal * 100 : 0;
+                  return <StockRow key={s.id} s={s} pct={pct} isLast={idx === combinedDisplay.length-1} isCombinedRow={true}/>;
+                })
+            )}
+            {!isCombined && (displayed.length === 0
+              ? <div style={{ textAlign: "center", color: "#bbb", fontSize: 13, padding: "30px 0" }}>종목이 없습니다.</div>
+              : displayed.map((s, idx) => {
+                  const pct = total > 0 ? s.amount / total * 100 : 0;
+                  return <StockRow key={s.id} s={{ ...s, _idx: idx }} pct={pct} isLast={idx === displayed.length-1} isCombinedRow={false}/>;
+                })
+            )}
+            {(() => {
+              const rows   = isCombined ? combinedDisplay : displayed;
+              const rTotal = rows.reduce((s, x) => s + x.amount, 0);
+              const grand  = isCombined ? combinedTotal : total;
+              return rows.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: isCombined ? "16px 1fr 110px" : "16px 1fr 100px 60px",
+                  alignItems: "center", padding: "8px 14px", background: "#f0f2f8", borderTop: "2px solid #e0e4ef" }}>
+                  <span/>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#555" }}>합계 ({rows.length}종목)</span>
+                  <span style={{ textAlign: "right", fontSize: 12, fontWeight: 700, color: "#1a1a2e" }}>{fmt(rTotal)}</span>
+                  {!isCombined && <span/>}
+                </div>
+              );
+            })()}
+          </div>
+        </>
+      }
+    </div>
+  );
+}
